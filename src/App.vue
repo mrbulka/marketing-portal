@@ -1,30 +1,39 @@
 <script setup>
-import HelloWorld from './components/HelloWorld.vue'
+// Root layout with simple navigation and router view
 </script>
 
 <template>
-  <div>
-    <a href="https://vitejs.dev" target="_blank">
-      <img src="/vite.svg" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://vuejs.org/" target="_blank">
-      <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-    </a>
-  </div>
-  <HelloWorld msg="Vite + Vue" />
+  <header class="topbar">
+    <nav class="nav">
+      <router-link to="/" class="nav-link">Home</router-link>
+      <router-link to="/twitter" class="nav-link">Twitter</router-link>
+    </nav>
+  </header>
+
+  <router-view />
 </template>
 
 <style scoped>
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #1f2937; /* slate-800 */
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #0f172a; /* slate-900 */
 }
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
+.nav {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
 }
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #42b883aa);
+.nav-link {
+  color: #e5e7eb;
+  text-decoration: none;
+  font-weight: 600;
+}
+.nav-link:hover {
+  color: #ffffff;
+  text-decoration: underline;
 }
 </style>
