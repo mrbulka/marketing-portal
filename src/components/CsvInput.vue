@@ -159,6 +159,8 @@ async function onFileChange(e) {
   padding: 0.5rem;
   border-radius: 6px;
   border: 1px solid #ddd;
+  background: #ffffff;
+  color: #111827;
 }
 .file {
   display: block;

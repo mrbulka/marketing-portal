@@ -13,6 +13,41 @@
   <router-view />
 </template>
 
+<style>
+/* Global resets and theme overrides */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f6f7fb; /* light background for better contrast */
+  color: #111827;      /* slate-900 text */
+}
+
+#app {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: initial; /* avoid global center-align */
+}
+
+/* Links */
+a {
+  color: #2563eb;      /* blue-600 */
+  text-decoration: none;
+}
+a:hover {
+  color: #1d4ed8;      /* blue-700 */
+  text-decoration: underline;
+}
+</style>
+
 <style scoped>
 .topbar {
   position: sticky;
