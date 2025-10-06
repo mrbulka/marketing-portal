@@ -5,6 +5,7 @@ function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
 }
 
 function getBackendBase() {
@@ -102,13 +103,35 @@ export default async function handler(req, res) {
       return res.end(JSON.stringify({ error: validation.error, code: validation.code }));
     }
 
+    // If header is "userName,userLink", add an empty "directMessage" column to satisfy backend contract.
+    let csvToSend = csvText;
+    try {
+      const lines = csvText.replace(/^\uFEFF/, '').split(/\r?\n/);
+      const header = (lines[0] || '').trim();
+      if (header === 'userName,userLink') {
+        const transformed = ['userName,userLink,directMessage'];
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line || !line.trim()) {
+            transformed.push(line);
+          } else {
+            transformed.push(line.endsWith(',') ? line : line + ',');
+          }
+        }
+        csvToSend = transformed.join('\n');
+      }
+    } catch {
+      // best-effort; fall back to original csvText
+      csvToSend = csvText;
+    }
+
     // Forward to backend
     const upstream = await fetch(`${backendBase}/marketing/generate_dm_list`, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/csv',
       },
-      body: csvText,
+      body: csvToSend,
     });
 
     // Pass through non-202 responses as-is (map to JSON/text)

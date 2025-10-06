@@ -124,16 +124,18 @@ function parseSeedUsernames(text) {
 }
 
 function buildFilters() {
+  // Map UI inputs to backend contract:
+  // followersMin, followersMax, wordFilters (array of strings)
   const filters = {};
   const min = Number(minFollowers.value);
   const max = Number(maxFollowers.value);
-  if (!Number.isNaN(min) && minFollowers.value !== '') filters.minFollowers = min;
-  if (!Number.isNaN(max) && maxFollowers.value !== '') filters.maxFollowers = max;
+  if (!Number.isNaN(min) && minFollowers.value !== '') filters.followersMin = min;
+  if (!Number.isNaN(max) && maxFollowers.value !== '') filters.followersMax = max;
   const kw = (keywordsInput.value || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (kw.length) filters.keywords = kw;
+  if (kw.length) filters.wordFilters = kw;
   return Object.keys(filters).length ? filters : undefined;
 }
 
