@@ -1,10 +1,10 @@
 <script setup>
 import { ref } from 'vue';
 import CsvInput from '../components/CsvInput.vue';
-import { waitAndDownload } from '../utils/polling';
+import { waitAndDownload, waitForCsvText } from '../utils/polling';
 
 //
-// Outreach DM List (CSV) state
+// Outreach DMs (CSV) state
 //
 const csvText = ref('');
 const csvValid = ref(false);
@@ -103,10 +103,12 @@ function cancelDm() {
 }
 
 //
-// Leads generation state
+// Leads generation state (now first section)
 //
 const seedUsernamesInput = ref('');
-const filtersInput = ref('');
+const minFollowers = ref('');
+const maxFollowers = ref('');
+const keywordsInput = ref('');
 const leadsSubmitting = ref(false);
 const leadsStatus = ref('');
 const leadsTurnId = ref('');
@@ -121,7 +123,22 @@ function parseSeedUsernames(text) {
     .filter((s) => s.length > 0);
 }
 
-async function submitLeads() {
+function buildFilters() {
+  const filters = {};
+  const min = Number(minFollowers.value);
+  const max = Number(maxFollowers.value);
+  if (!Number.isNaN(min) && minFollowers.value !== '') filters.minFollowers = min;
+  if (!Number.isNaN(max) && maxFollowers.value !== '') filters.maxFollowers = max;
+  const kw = (keywordsInput.value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (kw.length) filters.keywords = kw;
+  return Object.keys(filters).length ? filters : undefined;
+}
+
+async function submitLeadsDownload() {
+  // Original behavior: run leads and download CSV when ready
   leadsStatus.value = '';
   leadsTurnId.value = '';
   leadsError.value = '';
@@ -132,18 +149,7 @@ async function submitLeads() {
     return;
   }
 
-  let filters;
-  if (filtersInput.value.trim()) {
-    try {
-      filters = JSON.parse(filtersInput.value);
-      if (typeof filters !== 'object' || filters === null) {
-        throw new Error('Filters must be a JSON object.');
-      }
-    } catch (e) {
-      leadsError.value = e?.message || 'Invalid filters JSON.';
-      return;
-    }
-  }
+  const filters = buildFilters();
 
   leadsSubmitting.value = true;
   leadsAbort.value = new AbortController();
@@ -203,6 +209,146 @@ async function submitLeads() {
 function cancelLeads() {
   leadsAbort.value?.abort();
 }
+
+// CSV helpers to convert Leads result -> Outreach CSV (userName,userLink)
+function splitCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function parseCsvToObjects(text) {
+  const lines = (text || '').split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]).map((h) => h.trim());
+  const lower = headers.map((h) => h.toLowerCase());
+  const rows = lines.slice(1).map((l) => splitCsvLine(l));
+  const objs = rows.map((arr) => {
+    const o = {};
+    for (let i = 0; i < headers.length; i++) o[headers[i]] = arr[i] ?? '';
+    return o;
+  });
+  return { headers, lower, rows: objs };
+}
+
+function leadsCsvToOutreachCsv(leadsCsvText) {
+  const { headers, lower, rows } = parseCsvToObjects(leadsCsvText);
+  if (!rows.length) return 'userName,userLink';
+
+  const findIdx = (candidates) =>
+    lower.findIndex((h) => candidates.includes(h));
+
+  const idxUser = findIdx(['username', 'user', 'user_name', 'userName'.toLowerCase()]);
+  const idxLink = findIdx(['userlink', 'user_link', 'profileurl', 'url', 'link']);
+
+  const headerUser = headers[idxUser] ?? 'userName';
+  const headerLink = headers[idxLink] ?? 'userLink';
+
+  const out = ['userName,userLink'];
+  for (const row of rows) {
+    let uname = idxUser >= 0 ? String(row[headers[idxUser]] || '') : '';
+    uname = uname.replace(/^@/, '').trim();
+    if (!uname) continue;
+    let ulink = idxLink >= 0 ? String(row[headers[idxLink]] || '') : '';
+    ulink = ulink.trim();
+    if (!ulink) {
+      ulink = `https://twitter.com/${uname}`;
+    }
+    out.push(`${uname},${ulink}`);
+  }
+  return out.join('\n');
+}
+
+async function submitLeadsFillOutreach() {
+  leadsStatus.value = '';
+  leadsTurnId.value = '';
+  leadsError.value = '';
+
+  const seeds = parseSeedUsernames(seedUsernamesInput.value);
+  if (!seeds.length) {
+    leadsError.value = 'Please provide at least one seed username.';
+    return;
+  }
+
+  const filters = buildFilters();
+
+  leadsSubmitting.value = true;
+  leadsAbort.value = new AbortController();
+
+  try {
+    const resp = await fetch('/api/marketing/generate_leads', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(
+        filters !== undefined ? { seedUserNames: seeds, filters } : { seedUserNames: seeds }
+      ),
+      signal: leadsAbort.value.signal,
+    });
+
+    if (resp.status !== 202) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(text || `Unexpected status ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    leadsTurnId.value = data.turnId || '';
+    const resultUrl = data.resultUrl;
+    leadsStatus.value = 'Job accepted. Waiting for results...';
+
+    const csvRaw = await waitForCsvText(resultUrl, {
+      signal: leadsAbort.value.signal,
+      onTick: ({ attempt, status, message }) => {
+        if (status === 202) {
+          leadsStatus.value = `Job ${leadsTurnId.value || ''} not ready yet (attempt ${attempt + 1}).`;
+        } else if (status === 200) {
+          leadsStatus.value = `Ready. Parsing results and filling Outreach CSV...`;
+        } else if (status === 400) {
+          leadsStatus.value = 'Invalid token. Please try again.';
+        } else if (status === 410) {
+          leadsStatus.value = 'Result expired. Please start a new job.';
+        } else if (status === 0) {
+          leadsStatus.value = `Network error. Retrying... (attempt ${attempt + 1})`;
+        } else {
+          leadsStatus.value = message || `Status ${status}`;
+        }
+      },
+    });
+
+    // Convert the leads result into Outreach CSV (no directMessage column required)
+    const outreach = leadsCsvToOutreachCsv(csvRaw);
+    csvText.value = outreach; // This will cause CsvInput to validate and enable Outreach submit
+    leadsStatus.value = 'Ready. Outreach CSV has been populated from Leads results.';
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      leadsStatus.value = 'Cancelled.';
+    } else {
+      leadsStatus.value = e?.message || 'Error submitting job.';
+    }
+  } finally {
+    leadsSubmitting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -212,14 +358,61 @@ function cancelLeads() {
       Start a marketing job and download results without exposing backend details. Your CSV results will be proxied and downloaded securely from this site.
     </p>
 
-    <section class="card">
+    <!-- Leads section first -->
+    <section class="card" id="leads">
+      <h2>Leads Discovery</h2>
+      <p>Enter seed Twitter usernames (comma, spaces, or newlines separated). Optionally set filters below.</p>
+
+      <label class="label">Seed Usernames</label>
+      <textarea
+        class="textarea"
+        rows="4"
+        placeholder="user1, user2, user3"
+        v-model="seedUsernamesInput"
+      ></textarea>
+
+      <div class="filters">
+        <div class="filter">
+          <label class="label">Min Followers</label>
+          <input class="input" type="number" min="0" placeholder="e.g. 100" v-model="minFollowers" />
+        </div>
+        <div class="filter">
+          <label class="label">Max Followers</label>
+          <input class="input" type="number" min="0" placeholder="e.g. 10000" v-model="maxFollowers" />
+        </div>
+        <div class="filter keywords">
+          <label class="label">Keywords (comma separated)</label>
+          <input class="input" type="text" placeholder="ai, startups, marketing" v-model="keywordsInput" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" :disabled="leadsSubmitting" @click="submitLeadsDownload">
+          {{ leadsSubmitting ? 'Submitting…' : 'Start Leads Job (Download CSV)' }}
+        </button>
+        <button class="btn secondary" :disabled="leadsSubmitting" @click="submitLeadsFillOutreach">
+          {{ leadsSubmitting ? 'Submitting…' : 'Start Leads Job and Fill Outreach' }}
+        </button>
+        <button class="btn" :disabled="!leadsSubmitting" @click="cancelLeads">Cancel</button>
+      </div>
+      <p v-if="leadsError" class="error">{{ leadsError }}</p>
+      <p v-if="leadsTurnId" class="muted">Turn ID: <code>{{ leadsTurnId }}</code></p>
+      <p v-if="leadsStatus" class="status">{{ leadsStatus }}</p>
+    </section>
+
+    <!-- Outreach section second -->
+    <section class="card" id="outreach">
       <h2>Outreach DMs</h2>
-      <p>Provide a CSV with the exact header: <code>userName,userLink,directMessage</code>.</p>
+      <p>
+        Provide a CSV with header <code>userName,userLink,directMessage</code> or just <code>userName,userLink</code>. 
+        The directMessage column is optional.
+      </p>
       <CsvInput
         v-model="csvText"
         @validity="onCsvValidity"
         label="Outreach CSV"
-        :help="'Paste CSV or upload a file (max 300 rows). Header must be: userName,userLink,directMessage'"
+        :help="'Paste CSV or upload a file (max 300 rows). Allowed headers: userName,userLink or userName,userLink,directMessage'"
+        :allowed-headers="['userName,userLink','userName,userLink,directMessage']"
       />
       <div class="actions">
         <button class="btn primary" :disabled="dmSubmitting || !csvValid" @click="submitDmList">
@@ -230,37 +423,6 @@ function cancelLeads() {
       <p v-if="csvError" class="error">{{ csvError }}</p>
       <p v-if="dmTurnId" class="muted">Turn ID: <code>{{ dmTurnId }}</code></p>
       <p v-if="dmStatus" class="status">{{ dmStatus }}</p>
-    </section>
-
-    <section class="card">
-      <h2>Leads Discovery</h2>
-      <p>Enter seed Twitter usernames (comma, spaces, or newlines separated). Optional: filters JSON.</p>
-
-      <label class="label">Seed Usernames</label>
-      <textarea
-        class="textarea"
-        rows="4"
-        placeholder="user1, user2, user3"
-        v-model="seedUsernamesInput"
-      ></textarea>
-
-      <label class="label">Filters (optional JSON)</label>
-      <textarea
-        class="textarea"
-        rows="4"
-        placeholder='{"minFollowers": 100, "keyword": "ai"}'
-        v-model="filtersInput"
-      ></textarea>
-
-      <div class="actions">
-        <button class="btn primary" :disabled="leadsSubmitting" @click="submitLeads">
-          {{ leadsSubmitting ? 'Submitting…' : 'Start Leads Job' }}
-        </button>
-        <button class="btn" :disabled="!leadsSubmitting" @click="cancelLeads">Cancel</button>
-      </div>
-      <p v-if="leadsError" class="error">{{ leadsError }}</p>
-      <p v-if="leadsTurnId" class="muted">Turn ID: <code>{{ leadsTurnId }}</code></p>
-      <p v-if="leadsStatus" class="status">{{ leadsStatus }}</p>
     </section>
   </main>
 </template>
@@ -295,11 +457,31 @@ function cancelLeads() {
   border-radius: 6px;
   border: 1px solid #ddd;
   margin-top: 0.25rem;
+  background: #ffffff;
+  color: #111827;
+}
+.input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+}
+.filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin-top: 0.5rem;
+}
+.filters .keywords {
+  grid-column: 1 / -1;
 }
 .actions {
   display: flex;
   gap: 0.75rem;
   margin: 0.75rem 0;
+  flex-wrap: wrap;
 }
 .btn {
   display: inline-flex;
@@ -323,6 +505,14 @@ function cancelLeads() {
 .btn.primary:hover {
   background: #369f6d;
 }
+.btn.secondary {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+.btn.secondary:hover {
+  background: #1d4ed8;
+}
 .status {
   font-weight: 600;
   color: #2e7d32;
@@ -338,5 +528,10 @@ code {
   background: #f6f6f6;
   padding: 0.125rem 0.25rem;
   border-radius: 4px;
+}
+@media (max-width: 640px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

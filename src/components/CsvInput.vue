@@ -21,6 +21,14 @@ const props = defineProps({
     type: String,
     default: REQUIRED_HEADER,
   },
+  /**
+   * Optional list of allowed headers. If provided, validation will pass when
+   * the CSV header matches any of the entries.
+   */
+  allowedHeaders: {
+    type: Array,
+    default: () => [REQUIRED_HEADER, 'userName,userLink'],
+  },
   maxRows: {
     type: Number,
     default: MAX_TARGETS,
@@ -72,8 +80,11 @@ function validate() {
   }
   const lines = t.split(/\r?\n/);
   const header = (lines[0] || '').trim();
-  if (header !== (props.requiredHeader || REQUIRED_HEADER)) {
-    error.value = `Invalid header. Expected exactly "${props.requiredHeader || REQUIRED_HEADER}".`;
+  const allowed = (Array.isArray(props.allowedHeaders) && props.allowedHeaders.length
+    ? props.allowedHeaders
+    : [props.requiredHeader || REQUIRED_HEADER]);
+  if (!allowed.includes(header)) {
+    error.value = `Invalid header. Expected one of: ${allowed.join(' | ')}.`;
     emit('validity', { ok: false, reason: 'INVALID_HEADER' });
     return;
   }

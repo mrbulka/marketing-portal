@@ -119,3 +119,31 @@ export async function waitAndDownload(resultUrl, { signal, onTick } = {}) {
   }
   return res;
 }
+
+/**
+ * Poll until ready (HTTP 200), then fetch the CSV body as text and return it.
+ * Useful when we need to parse the CSV in the UI instead of downloading it.
+ */
+export async function waitForCsvText(resultUrl, { signal, onTick } = {}) {
+  const res = await pollForReady(resultUrl, { signal, onTick });
+  if (!res?.ready) {
+    const err = new Error('Result not ready');
+    err.status = 202;
+    throw err;
+  }
+  const resp = await fetch(resultUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'text/csv',
+    },
+    signal,
+    cache: 'no-store',
+  });
+  if (resp.status !== 200) {
+    const text = await resp.text().catch(() => '');
+    const err = new Error(`Unexpected status ${resp.status}${text ? ': ' + text : ''}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return await resp.text();
+}

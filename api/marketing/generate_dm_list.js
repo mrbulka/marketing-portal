@@ -1,4 +1,4 @@
-const REQUIRED_HEADER = 'userName,userLink,directMessage';
+const ALLOWED_HEADERS = ['userName,userLink,directMessage', 'userName,userLink'];
 const MAX_TARGETS = 300;
 
 function setCors(res) {
@@ -45,10 +45,10 @@ function validateCsv(csvText) {
   const text = csvText.replace(/^\uFEFF/, ''); // strip BOM if present
   const lines = text.split(/\r?\n/);
   const header = (lines[0] || '').trim();
-  if (header !== REQUIRED_HEADER) {
+  if (!ALLOWED_HEADERS.includes(header)) {
     return {
       ok: false,
-      error: `Invalid header. Expected exactly "${REQUIRED_HEADER}".`,
+      error: `Invalid header. Expected one of: ${ALLOWED_HEADERS.join(' | ')}`,
       code: 'INVALID_HEADER',
     };
   }
